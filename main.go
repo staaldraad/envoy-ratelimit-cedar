@@ -15,11 +15,17 @@ type RateLimitServer struct {
 func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.RateLimitRequest) (*pb.RateLimitResponse, error) {
 	response := &pb.RateLimitResponse{}
 	response.Statuses = make([]*pb.RateLimitResponse_DescriptorStatus, 1)
+	// response.Statuses[0] = &pb.RateLimitResponse_DescriptorStatus{
+	// 	Code:           pb.RateLimitResponse_OK,
+	// 	CurrentLimit:   nil,
+	// 	LimitRemaining: 100,
+	// }
 	response.Statuses[0] = &pb.RateLimitResponse_DescriptorStatus{
-		Code:           pb.RateLimitResponse_OK,
+		Code:           pb.RateLimitResponse_OVER_LIMIT,
 		CurrentLimit:   nil,
-		LimitRemaining: 100,
+		LimitRemaining: 0,
 	}
+	fmt.Println("limiter")
 	return response, nil
 }
 
