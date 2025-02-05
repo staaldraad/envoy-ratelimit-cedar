@@ -20,9 +20,10 @@ func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.Rate
 	// 	CurrentLimit:   nil,
 	// 	LimitRemaining: 100,
 	// }
+	limit := &pb.RateLimitResponse_RateLimit{}
 	response.Statuses[0] = &pb.RateLimitResponse_DescriptorStatus{
 		Code:           pb.RateLimitResponse_OVER_LIMIT,
-		CurrentLimit:   nil,
+		CurrentLimit:   limit,
 		LimitRemaining: 0,
 	}
 	fmt.Println("limiter")
