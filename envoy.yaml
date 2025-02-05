@@ -40,8 +40,10 @@ static_resources:
                           timeout: 0s
                           rate_limits:
                             - actions:
-                                - source_cluster: {} 
-                                - destination_cluster: {}
+                                - {source_cluster: {}}
+                                - {remote_address: {}}
+                                - {request_headers: {header_name: "authorization", descriptor_key: "authorization"}}
+                                - {request_headers: {header_name: ":path", descriptor_key: "path"}}
                   
   clusters:
     - name: ratelimit
