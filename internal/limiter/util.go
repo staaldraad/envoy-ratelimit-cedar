@@ -2,10 +2,18 @@ package limiter
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/golang-jwt/jwt"
 )
+
+type PathParts struct {
+	Table    string
+	Function string
+	Columns  []string
+	Filters  map[string]string
+}
 
 func validateToken(tokenString string, hmacSecret []byte) (jwt.MapClaims, error) {
 	// remove bearer keyword if present
@@ -28,4 +36,65 @@ func validateToken(tokenString string, hmacSecret []byte) (jwt.MapClaims, error)
 		return claims, nil
 	}
 	return nil, nil
+}
+
+func parsePath(path string) PathParts {
+	parsedPath := PathParts{}
+	u, _ := url.Parse(path)
+	query := u.Query()
+	if strings.HasPrefix(u.Path, "/rpc/") {
+		parsedPath.Function = strings.SplitAfter(u.Path, "/")[2]
+	} else {
+		parsedPath.Table = strings.Replace(u.Path, "/", "", 1)
+	}
+
+	for q, p := range query {
+		switch q {
+		case "select":
+			columns := strings.Split(p[0], ",")
+			// remove casting
+			for k, v := range columns {
+				columns[k] = strings.SplitN(v, "::", 2)[0]
+			}
+			parsedPath.Columns = columns
+		default:
+			if parsedPath.Filters == nil {
+				parsedPath.Filters = make(map[string]string)
+			}
+			parsedPath.Filters[q] = p[0]
+		}
+	}
+	return parsedPath
+}
+
+func extractJWT(hmacSecret []byte, authString string) jwt.MapClaims {
+	if authString != "" {
+		// validate token
+		jwt, err := validateToken(authString, hmacSecret)
+		if err == nil && jwt != nil {
+			return jwt
+		}
+	}
+	return nil
+}
+
+func extractSQLMethod(method, prefer string) string {
+	// add method
+	switch method {
+	case "GET":
+		return "SELECT"
+	case "POST":
+		// check if INSERT or UPSERT POST
+		if prefer == "resolution=merge-duplicates" {
+			return "UPSERT"
+		}
+		return "INSERT"
+	case "PATCH":
+		return "UPDATE"
+	case "PUT":
+		return "UPSERT"
+	case "DELETE":
+		return "DELETE"
+	}
+	return ""
 }

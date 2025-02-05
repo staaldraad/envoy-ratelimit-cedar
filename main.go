@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net"
 
@@ -11,14 +12,26 @@ import (
 
 func main() {
 
-	fmt.Println("woot")
+	hmacSecretPtr := flag.String("hmac", "", "a secret to sign the jwt")
+	pathPtr := flag.String("path", "limit.cedar", "path to the policy file to use")
+	flag.Parse()
+
+	if *pathPtr == "" {
+		fmt.Println("requires --path value")
+		return
+	}
+
+	if *hmacSecretPtr == "" {
+		fmt.Println("requires --hmac value")
+		return
+	}
 
 	endPoint := fmt.Sprintf("localhost:%d", 3007)
 	listen, _ := net.Listen("tcp", endPoint)
 
 	grpcServer := grpc.NewServer()
 
-	service := &limiter.RateLimitServer{}
+	service := &limiter.RateLimitServer{HMACSecret: []byte(*hmacSecretPtr)}
 
 	pb.RegisterRateLimitServiceServer(grpcServer, service)
 
