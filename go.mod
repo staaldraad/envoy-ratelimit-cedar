@@ -15,9 +15,11 @@ require (
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect
 	github.com/tidwall/tinyqueue v0.1.1 // indirect
+	golang.org/x/exp v0.0.0-20240222234643-814bf88cf225 // indirect
 )
 
 require (
+	github.com/cedar-policy/cedar-go v1.1.0
 	github.com/cncf/xds/go v0.0.0-20240905190251-b4127c9b8d78 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible

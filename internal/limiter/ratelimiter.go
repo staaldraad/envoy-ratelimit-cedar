@@ -6,25 +6,16 @@ import (
 	"fmt"
 	"time"
 
+	cedar "github.com/cedar-policy/cedar-go"
 	pb "github.com/envoyproxy/go-control-plane/envoy/service/ratelimit/v3"
 	"github.com/golang-jwt/jwt"
-	"github.com/tidwall/buntdb"
 )
 
-const expireTime = time.Second * 10
+const expireTime = time.Second * 60
 
 type RateLimitServer struct {
 	HMACSecret []byte
-	db         *buntdb.DB
-	dbWorker   *Worker
-}
-
-type Worker struct {
-	Stopped         bool
-	ShutdownChannel chan string
-	Interval        time.Duration
-	period          time.Duration
-	db              *buntdb.DB
+	backend    *BackendService
 }
 
 type RequestState struct {
@@ -35,78 +26,25 @@ type RequestState struct {
 	Method        string
 }
 
+// set the json values as single chars to save space in buntdb
 type RequestCounters struct {
-	BucketStart time.Time                        // when did this request counter first start
-	Global      int64                            // total requests
-	Table       map[string]*TableRequestCounters // requests by path
-	Function    map[string]int                   // requests for function
+	BucketStart time.Time             `json:"s"` // when did this request counter first start
+	Global      int64                 `json:"g"` // total requests
+	Table       *TableRequestCounters `json:"t"` // requests by path
+	Function    int                   `json:"f"` // requests for function
 }
 
 type TableRequestCounters struct {
-	MethodCount map[string]int
-}
-
-func NewWorker(interval time.Duration, db *buntdb.DB) *Worker {
-	return &Worker{
-		Stopped:         false,
-		ShutdownChannel: make(chan string),
-		Interval:        interval,
-		period:          interval,
-		db:              db,
-	}
-}
-func (w *Worker) Run() {
-	for {
-		select {
-		case <-w.ShutdownChannel:
-			w.ShutdownChannel <- "stop"
-			return
-		case <-time.After(w.period):
-			break
-		}
-		started := time.Now()
-		w.db.Shrink()
-		finished := time.Now()
-
-		duration := finished.Sub(started)
-		w.period = w.Interval - duration
-	}
-}
-
-// Shutdown is a graceful shutdown mechanism
-func (w *Worker) Shutdown() {
-	w.Stopped = true
-
-	w.ShutdownChannel <- "stop"
-	<-w.ShutdownChannel
-
-	close(w.ShutdownChannel)
+	MethodCount map[string]int `json:"m"`
 }
 
 func (rl *RateLimitServer) StartBackend(path string) error {
-	var err error
-	rl.db, err = buntdb.Open(path)
-	if err != nil {
-		return err
-	}
-	// setup background worker
-	rl.dbWorker = NewWorker(5*time.Minute, rl.db)
-	rl.dbWorker.Run()
-	defer rl.CloseBackend()
+	rl.backend = &BackendService{}
+	rl.backend.StartBackend(path)
 	return nil
 }
 
-func (rl *RateLimitServer) CloseBackend() {
-	rl.db.Close()
-}
-
-func (rl *RateLimitServer) DbManagerStart() {
-
-}
-
 func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.RateLimitRequest) (*pb.RateLimitResponse, error) {
-	fmt.Printf("limiter called %v\n", request)
-
 	state := &RequestState{}
 	preferHeader := ""
 	// get values from descriptors
@@ -133,59 +71,28 @@ func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.Rate
 		state.Method = extractSQLMethod(state.Method, preferHeader)
 	}
 
-	fmt.Println(state)
-
-	remoteAddressRequestCounters := &RequestCounters{}
 	// get IP limits
-	rl.db.View(func(tx *buntdb.Tx) error {
-		val, err := tx.Get(state.RemoteAddress)
-		if err != nil {
-			if err == buntdb.ErrNotFound {
-				remoteAddressRequestCounters.BucketStart = time.Now()
-				return nil
-			}
-			return err
-		}
-
-		json.Unmarshal([]byte(val), remoteAddressRequestCounters)
-		return nil
-	})
+	remoteAddressRequestCounters, _ := rl.backend.Get(state.RemoteAddress)
+	// get User limits
+	var userId string
+	if v, ok := state.Authorization["role"]; ok && v == "anon" {
+		userId = "anon"
+	} else if ok && v == "service_role" {
+		userId = "service_role"
+	} else if v, ok := state.Authorization["id"]; ok {
+		userId = v.(string)
+	}
+	userRequestCounters, _ := rl.backend.Get(userId)
 
 	fmt.Println(remoteAddressRequestCounters)
+	fmt.Println(userRequestCounters)
 
-	// update request counters for remote address and user
-	rl.db.Update(func(tx *buntdb.Tx) error {
-		var err error
-		remoteAddressRequestCounters.Global += 1
-		if state.Path.Table != "" {
-			if remoteAddressRequestCounters.Table == nil {
-				remoteAddressRequestCounters.Table = map[string]*TableRequestCounters{}
-			}
-			if _, ok := remoteAddressRequestCounters.Table[state.Path.Table]; !ok {
-				remoteAddressRequestCounters.Table[state.Path.Table] = &TableRequestCounters{MethodCount: make(map[string]int)}
-			}
-			remoteAddressRequestCounters.Table[state.Path.Table].MethodCount[state.Method] += 1
-		}
-		if state.Path.Function != "" {
-			if remoteAddressRequestCounters.Function == nil {
-				remoteAddressRequestCounters.Function = make(map[string]int)
-			}
-			remoteAddressRequestCounters.Function[state.Path.Function] += 1
-		}
+	checkLimits(state, &remoteAddressRequestCounters)
+	// update request counters for remote address
+	updateLimits(state, &remoteAddressRequestCounters)
+	updateLimits(state, &userRequestCounters)
 
-		b, _ := json.Marshal(remoteAddressRequestCounters)
-
-		// need to calculate when to auto expire this value, everytime the value is set, the TTL gets reset
-		// we want the TTL to be the lifetime of the bucket, not the time since last update
-		ttlRemaining := expireTime - time.Since(remoteAddressRequestCounters.BucketStart)
-		_, _, err = tx.Set(state.RemoteAddress, string(b), &buntdb.SetOptions{Expires: true, TTL: ttlRemaining})
-
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-
+	rl.backend.BatchUpdate([]string{state.RemoteAddress, userId}, []RequestCounters{remoteAddressRequestCounters, userRequestCounters})
 	response := &pb.RateLimitResponse{}
 	response.Statuses = make([]*pb.RateLimitResponse_DescriptorStatus, 1)
 	// response.Statuses[0] = &pb.RateLimitResponse_DescriptorStatus{
@@ -201,4 +108,113 @@ func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.Rate
 	}
 	fmt.Println("limiter")
 	return response, nil
+}
+
+func updateLimits(state *RequestState, rateLimitCounter *RequestCounters) {
+	if state.Path.Table != "" {
+		if rateLimitCounter.Table == nil {
+			rateLimitCounter.Table = &TableRequestCounters{MethodCount: make(map[string]int)}
+		}
+		rateLimitCounter.Table.MethodCount[state.Method] += 1
+	}
+	if state.Path.Function != "" {
+		rateLimitCounter.Function += 1
+	}
+	// keep track of total requests
+	rateLimitCounter.Global += 1
+}
+
+type Entity struct {
+	Uid     EntityDef              `json:"uid"`
+	Attrs   map[string]interface{} `json:"attrs"`
+	Parents []EntityDef            `json:"parents"`
+}
+type EntityDef struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+const alwaysPermit = `permit (
+	principal,
+	action,
+	resource
+);
+`
+const policyCedar = `forbid (
+	principal,
+	action == Action::"SELECT",
+	resource in Table::"tbl"
+  ) when {
+	resource.requests > 5
+	||
+	context.total_requests > 10
+  };
+`
+
+func checkLimits(state *RequestState, rateLimitCounter *RequestCounters) {
+	ents := make([]Entity, 3)
+
+	tableAttrs := make(map[string]interface{})
+	if rateLimitCounter.Table == nil {
+		tableAttrs["requests"] = 0
+	} else {
+		if r, ok := rateLimitCounter.Table.MethodCount[state.Method]; ok {
+			tableAttrs["requests"] = r
+		} else {
+			tableAttrs["requests"] = 0
+		}
+	}
+	funcAttrs := make(map[string]interface{})
+	funcAttrs["requests"] = rateLimitCounter.Function
+
+	ents[0] = Entity{Uid: EntityDef{Type: "User", ID: "jwt"}, Attrs: state.Authorization}
+	ents[1] = Entity{Uid: EntityDef{Type: "Table", ID: state.Path.Table}, Attrs: tableAttrs}
+	ents[2] = Entity{Uid: EntityDef{Type: "Function", ID: state.Path.Function}, Attrs: funcAttrs}
+
+	entitiesJSON, _ := json.Marshal(ents)
+	fmt.Println(string(entitiesJSON))
+	var entities cedar.EntityMap
+	if err := json.Unmarshal([]byte(entitiesJSON), &entities); err != nil {
+		fmt.Println(err)
+		return
+	}
+	var resource cedar.EntityUID
+	if state.Path.Table != "" {
+		resource = cedar.NewEntityUID("Table", cedar.String(state.Path.Table))
+	} else {
+		resource = cedar.NewEntityUID("Function", cedar.String(state.Path.Function))
+	}
+	totalRequests := cedar.Long(rateLimitCounter.Global)
+
+	req := cedar.Request{
+		Principal: cedar.NewEntityUID("User", cedar.String("jwt")),
+		Action:    cedar.NewEntityUID("Action", cedar.String(state.Method)),
+		Resource:  resource,
+		Context: cedar.NewRecord(cedar.RecordMap{
+			"remote_address": cedar.String(state.RemoteAddress),
+			"total_requests": totalRequests,
+		}),
+	}
+	var policy cedar.Policy
+	if err := policy.UnmarshalCedar([]byte(policyCedar)); err != nil {
+		fmt.Println(err)
+		return
+	}
+	var policyAllow cedar.Policy
+	if err := policyAllow.UnmarshalCedar([]byte(alwaysPermit)); err != nil {
+		fmt.Println(err)
+		return
+	}
+	ps := cedar.NewPolicySet()
+	ps.Add("policy0", &policyAllow)
+	ps.Add("policy1", &policy)
+	fmt.Println(req)
+	if okk, diag := ps.IsAuthorized(entities, req); !okk {
+		if len(diag.Errors) > 0 {
+			fmt.Println((diag.Errors))
+			return
+		}
+		fmt.Println("blocked request by policy")
+		return
+	}
 }
