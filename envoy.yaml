@@ -40,10 +40,18 @@ static_resources:
                           timeout: 0s
                           rate_limits:
                             - actions:
-                                - {source_cluster: {}}
-                                - {remote_address: {}}
-                                - {request_headers: {header_name: "authorization", descriptor_key: "authorization"}}
-                                - {request_headers: {header_name: ":path", descriptor_key: "path"}}
+                              - extension:
+                                  name: custom
+                                  typed_config:
+                                    "@type": type.googleapis.com/envoy.extensions.rate_limit_descriptors.expr.v3.Descriptor
+                                    descriptor_key: prefer
+                                    text: request.headers["prefer"]
+                                    skip_if_error: true
+                              - {source_cluster: {}}
+                              - {remote_address: {}}
+                              - {request_headers: {header_name: "authorization", descriptor_key: "authorization"}}
+                              - {request_headers: {header_name: ":path", descriptor_key: "path"}}
+                              - {request_headers: {header_name: ":method", descriptor_key: "method"}}
                   
   clusters:
     - name: ratelimit

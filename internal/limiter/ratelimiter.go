@@ -21,8 +21,9 @@ type RequestState struct {
 }
 
 func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.RateLimitRequest) (*pb.RateLimitResponse, error) {
-
+	fmt.Printf("limiter called %v", request)
 	state := &RequestState{}
+	preferHeader := ""
 	// get values from descriptors
 	for i := 0; i < len(request.Descriptors); i++ {
 		for j := 0; j < len(request.Descriptors[i].Entries); j++ {
@@ -35,10 +36,18 @@ func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.Rate
 			case "authorization":
 				state.Authorization = extractJWT(rl.HMACSecret, request.Descriptors[i].Entries[j].Value)
 			case "method":
-				state.Method = extractSQLMethod(request.Descriptors[i].Entries[j].Value, "")
+				state.Method = request.Descriptors[i].Entries[j].Value
+			case "prefer":
+				preferHeader = request.Descriptors[i].Entries[j].Value
 			}
 		}
 	}
+	// update method to SQL method
+	// need to do this here because we first needed to extract the prefer header from the descriptors
+	if state.Method != "" {
+		state.Method = extractSQLMethod(state.Method, preferHeader)
+	}
+
 	fmt.Println(state)
 
 	response := &pb.RateLimitResponse{}
