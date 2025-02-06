@@ -32,6 +32,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	service := &limiter.RateLimitServer{HMACSecret: []byte(*hmacSecretPtr)}
+	go service.StartBackend("data.db")
 
 	pb.RegisterRateLimitServiceServer(grpcServer, service)
 
