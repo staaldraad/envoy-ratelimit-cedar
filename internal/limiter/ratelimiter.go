@@ -87,7 +87,7 @@ func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.Rate
 	fmt.Println(remoteAddressRequestCounters)
 	fmt.Println(userRequestCounters)
 
-	checkLimits(state, &remoteAddressRequestCounters)
+	checkLimits(state, &userRequestCounters, &remoteAddressRequestCounters)
 	// update request counters for remote address
 	updateLimits(state, &remoteAddressRequestCounters)
 	updateLimits(state, &userRequestCounters)
@@ -151,25 +151,34 @@ const policyCedar = `forbid (
   };
 `
 
-func checkLimits(state *RequestState, rateLimitCounter *RequestCounters) {
-	ents := make([]Entity, 3)
+type attrs struct {
+	User   int
+	Remote int
+}
+
+func checkLimits(state *RequestState, userRateLimitCounter, remoteRateLimitCounter *RequestCounters) {
+	ents := make([]Entity, 4)
 
 	tableAttrs := make(map[string]interface{})
-	if rateLimitCounter.Table == nil {
-		tableAttrs["requests"] = 0
+	if userRateLimitCounter.Table == nil {
+		tableAttrs["requests"] = attrs{User: 0, Remote: 0}
 	} else {
-		if r, ok := rateLimitCounter.Table.MethodCount[state.Method]; ok {
-			tableAttrs["requests"] = r
-		} else {
-			tableAttrs["requests"] = 0
+		if r, ok := userRateLimitCounter.Table.MethodCount[state.Method]; ok {
+			tableAttrs["requests"] = attrs{User: r, Remote: 0}
+		}
+		if r, ok := remoteRateLimitCounter.Table.MethodCount[state.Method]; ok {
+			tableAttrs["requests"] = attrs{User: tableAttrs["requests"].(attrs).User, Remote: r}
 		}
 	}
 	funcAttrs := make(map[string]interface{})
-	funcAttrs["requests"] = rateLimitCounter.Function
+	funcAttrs["requests"] = attrs{User: userRateLimitCounter.Function, Remote: remoteRateLimitCounter.Function}
 
+	// Principals
 	ents[0] = Entity{Uid: EntityDef{Type: "User", ID: "jwt"}, Attrs: state.Authorization}
-	ents[1] = Entity{Uid: EntityDef{Type: "Table", ID: state.Path.Table}, Attrs: tableAttrs}
-	ents[2] = Entity{Uid: EntityDef{Type: "Function", ID: state.Path.Function}, Attrs: funcAttrs}
+	ents[1] = Entity{Uid: EntityDef{Type: "RemoteAddress", ID: state.RemoteAddress}}
+	// Resources
+	ents[2] = Entity{Uid: EntityDef{Type: "Table", ID: state.Path.Table}, Attrs: tableAttrs}
+	ents[3] = Entity{Uid: EntityDef{Type: "Function", ID: state.Path.Function}, Attrs: funcAttrs}
 
 	entitiesJSON, _ := json.Marshal(ents)
 	fmt.Println(string(entitiesJSON))
@@ -184,7 +193,7 @@ func checkLimits(state *RequestState, rateLimitCounter *RequestCounters) {
 	} else {
 		resource = cedar.NewEntityUID("Function", cedar.String(state.Path.Function))
 	}
-	totalRequests := cedar.Long(rateLimitCounter.Global)
+	totalRequests := cedar.Long(userRateLimitCounter.Global)
 
 	req := cedar.Request{
 		Principal: cedar.NewEntityUID("User", cedar.String("jwt")),
