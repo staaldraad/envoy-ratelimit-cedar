@@ -22,6 +22,7 @@ require (
 	github.com/cedar-policy/cedar-go v1.1.0
 	github.com/cncf/xds/go v0.0.0-20240905190251-b4127c9b8d78 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
+	github.com/fsnotify/fsnotify v1.8.0
 	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/tidwall/buntdb v1.3.2
