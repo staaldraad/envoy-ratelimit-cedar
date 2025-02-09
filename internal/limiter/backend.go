@@ -37,14 +37,13 @@ func (w *Worker) Run() {
 			w.ShutdownChannel <- "stop"
 			return
 		case <-time.After(w.period):
-			break
-		}
-		started := time.Now()
-		w.db.Shrink()
-		finished := time.Now()
+			started := time.Now()
+			w.db.Shrink()
+			finished := time.Now()
 
-		duration := finished.Sub(started)
-		w.period = w.Interval - duration
+			duration := finished.Sub(started)
+			w.period = w.Interval - duration
+		}
 	}
 }
 
