@@ -104,6 +104,7 @@ func (rl *RateLimitServer) ShouldRateLimit(ctx context.Context, request *pb.Rate
 			LimitRemaining:     0,
 			DurationUntilReset: &durationpb.Duration{Seconds: secondsToReset},
 		}
+		response.OverallCode = pb.RateLimitResponse_OVER_LIMIT
 	} else {
 		response.Statuses[0] = &pb.RateLimitResponse_DescriptorStatus{
 			Code: pb.RateLimitResponse_OK,

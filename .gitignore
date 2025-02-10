@@ -1,3 +1,5 @@
+certs/
 envoy-ratelimit-cedar
 .env
 *.db
+envoy.remote.yaml

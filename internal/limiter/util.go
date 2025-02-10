@@ -19,10 +19,11 @@ func parsePath(path string) PathParts {
 	parsedPath := PathParts{}
 	u, _ := url.Parse(path)
 	query := u.Query()
-	if strings.HasPrefix(u.Path, "/rpc/") {
-		parsedPath.Function = strings.SplitAfter(u.Path, "/")[2]
+	p := strings.Replace(u.Path, "/rest/v1", "", 1)
+	if strings.HasPrefix(p, "/rpc/") {
+		parsedPath.Function = strings.SplitAfter(p, "/")[2]
 	} else {
-		parsedPath.Table = strings.Replace(u.Path, "/", "", 1)
+		parsedPath.Table = strings.Replace(p, "/", "", 1)
 	}
 
 	for q, p := range query {
